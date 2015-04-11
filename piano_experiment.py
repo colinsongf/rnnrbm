@@ -8,10 +8,11 @@ import numpy as np
 from theano import tensor as T
 from blocks.bricks.recurrent import SimpleRecurrent, recurrent, BaseRecurrent
 
-from blocks.bricks.cost import CategoricalCrossEntropy, MisclassificationRate, SquaredError
+from utils import MismulitclassificationRate, NegativeLogLikelihood
+from blocks.bricks.cost import CategoricalCrossEntropy, SquaredError
 from blocks.initialization import IsotropicGaussian, Constant
-from blocks.algorithms import GradientDescent, Adam
-from blocks.bricks import Tanh, MLP, Linear
+from blocks.algorithms import GradientDescent, Adam, Scale, CompositeRule, StepClipping, RemoveNotFinite
+from blocks.bricks import Tanh, MLP, Linear, Sigmoid, Rectifier
 from blocks.main_loop import MainLoop
 from fuel.streams import DataStream
 from fuel.schemes import SequentialScheme
@@ -50,8 +51,8 @@ class SimpleRNN(BaseRecurrent):
         self.dims = dims
         # self.in_layer = MLP(activations=[Linear(dims[0], dims[1])], dims=[dims[0], dims[1]],
         # weights_init=IsotropicGaussian(0.01),
-        #                     biases_init=Constant(0.0),
-        #                     name="in_layer")
+        # biases_init=Constant(0.0),
+        # name="in_layer")
         self.in_layer = Linear(dims[0], dims[1],
                                weights_init=IsotropicGaussian(0.01),
                                biases_init=Constant(0.0),
@@ -62,7 +63,7 @@ class SimpleRNN(BaseRecurrent):
                                          biases_init=Constant(0.0),
                                          name="rnn_layer")
 
-        self.out_layer = MLP(activations=[Tanh()], dims=[dims[1], dims[2]],
+        self.out_layer = MLP(activations=[Sigmoid()], dims=[dims[1], dims[2]],
                              weights_init=IsotropicGaussian(0.01),
                              biases_init=Constant(0.0),
                              name="out_layer")
@@ -90,7 +91,7 @@ def get_datastream(dataset):
     dataset = DataStream(
         dataset,
         iteration_scheme=SequentialScheme(
-            dataset.num_examples, 400
+            dataset.num_examples, 300
         ),
     )
     dataset = Padding(dataset)
@@ -111,18 +112,18 @@ srnn.initialize()
 probs = srnn.apply(inputs=x)[1]
 probs = (probs.dimshuffle(2, 0, 1) * x_mask).dimshuffle(1, 2, 0)
 target = (y.dimshuffle(2, 0, 1) * y_mask).dimshuffle(1, 2, 0)
-cost = SquaredError().apply(target, probs)
-# error_rate = MisclassificationRate().apply(target, probs)
+cost = NegativeLogLikelihood().apply(target, probs, y_mask)
+error_rate = MismulitclassificationRate().apply(target, probs, y_mask)
 model = Model(cost)
 cg = ComputationGraph([cost])
 cost.name = "final_cost"
+step_rule = CompositeRule([RemoveNotFinite(), Adam(), StepClipping(6.0)])  # Scale(0.01)
 
-algorithm = GradientDescent(step_rule=Adam(), cost=cost, params=cg.parameters)
+algorithm = GradientDescent(step_rule=step_rule, cost=cost, params=cg.parameters)
 
-extensions = [
-              FinishAfter(after_n_epochs=1000),
+extensions = [FinishAfter(after_n_epochs=1000),
               DataStreamMonitoring(
-                  [cost],
+                  [cost, error_rate],
                   test,
                   prefix="test"),
               TrainingDataMonitoring(
@@ -136,9 +137,10 @@ bokeh = True
 if bokeh:
     extensions.append(Plot(
         'Testing blocks',
-        channels=[
-            ['test_final_cost', 'train_final_cost'],
-        ]))
+        channels=[['test_mismulitclassificationrate_apply_error_rate'],
+                  ['train_total_gradient_norm'],
+                  ['test_final_cost', 'train_final_cost'],
+                  ]))
 
 main_loop = MainLoop(algorithm=algorithm,
                      data_stream=train,
