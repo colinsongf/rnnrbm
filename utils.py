@@ -12,28 +12,25 @@ floatX = theano.config.floatX
 
 threshold = 0.5
 
+
 class MismulitclassificationRate(Cost):
     @application(outputs=["error_rate"])
     def apply(self, y, y_hat, y_mask=None):
-        if y_mask:
-            result = (T.sum(T.max(T.neq(y, T.ge(y_hat, threshold)), axis=2) * y_mask) /
-                      (T.sum(y_mask).astype(floatX)))
-        else:
-            result = (T.sum(T.max(T.neq(y, T.ge(y_hat, threshold)), axis=2)) /
-                      (y.shape[0] * y.shape[1]).astype(floatX))
-
+        if not y_mask:
+            y_mask = 1
+        result = (T.sum(T.max(T.neq(y, T.ge(y_hat, threshold)), axis=2) * y_mask) /
+                  (T.sum(y_mask).astype(floatX)))
         return result
+
 
 class MismulitmistakeRate(Cost):
     @application(outputs=["error_rate"])
     def apply(self, y, y_hat, y_mask=None):
-        if y_mask:
-            result = (T.sum(T.sum(T.neq(y, T.ge(y_hat, threshold)), axis=2) * y_mask) /
-                      ((T.sum(y_mask)*y.shape[2]).astype(floatX)))
-        else:
-            result = (T.sum(T.max(T.neq(y, T.ge(y_hat, threshold)), axis=2)) /
-                      (y.shape[0] * y.shape[1]).astype(floatX))
-
+        if not y_mask:
+            y_mask = 1
+        result = (T.sum(T.sum(T.neq(y, T.ge(y_hat, threshold)), axis=2) * y_mask) /
+                  # ((T.sum(y_mask) * y.shape[2]).astype(floatX)))
+                  T.sum(y_mask * T.sum(T.gt(y + T.ge(y_hat, threshold), 0), axis=2)))
         return result
 
 
@@ -42,16 +39,22 @@ class MeanSquare(Cost):
     def apply(self, y, y_hat, y_mask):
         return T.mean(T.sum((y - y_hat) ** 2, axis=2) * y_mask)
 
-class MeanSquare(Cost):
+
+class NegativeLogLikelihood(Cost):
     @application(outputs=["cost"])
     def apply(self, y, y_hat, y_mask):
-        return T.mean(T.sum((y - y_hat) ** 2, axis=2) * y_mask)
+        return -T.mean(T.sum(T.sum(
+            (y * T.log(T.switch(y_hat > 0, y_hat, 1e-18))) +
+            ((1 - y) * T.log(T.switch(1 - y_hat > 0, 1 - y_hat, 1e-18))),
+            axis=2) * y_mask), axis=1)
+
 
 class NanRectify(Activation):
     @application(inputs=['input_'], outputs=['output'])
     def apply(self, input_):
         input_ = T.switch(T.isnan(input_), 0, input_)
-        return T.switch(input_ > 0, input_, 0.01*input_)
+        return T.switch(input_ > 0, input_, 0.01 * input_)
+
 
 class ParametricRectifier(Activation):
     def __init__(self, leaky_init, *args, **kwargs):
