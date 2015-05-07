@@ -1,23 +1,20 @@
 __author__ = 'mike'
 
-import theano
 from theano import config
 
 floatX = config.floatX
 import numpy as np
 from theano import tensor as T
-from blocks.bricks.recurrent import SimpleRecurrent, recurrent, BaseRecurrent, LSTM
+from blocks.bricks.recurrent import recurrent, BaseRecurrent, LSTM
 
-from utils import MismulitclassificationRate, MeanSquare, ParametricRectifier, MismulitmistakeRate, NanRectify, \
-    NegativeLogLikelihood
-from blocks.bricks.cost import CategoricalCrossEntropy, SquaredError
-from blocks.initialization import IsotropicGaussian, Constant, Identity
-from blocks.algorithms import GradientDescent, Adam, Scale, CompositeRule, StepClipping, RemoveNotFinite
-from blocks.bricks import Tanh, MLP, Linear, Sigmoid, Rectifier, WEIGHT, BIAS
-from blocks import bricks
+from models import SimpleRNN
+from utils import MismulitclassificationRate, MismulitmistakeRate, NegativeLogLikelihood
+from blocks.initialization import IsotropicGaussian, Constant
+from blocks.algorithms import GradientDescent, Adam, CompositeRule, StepClipping, RemoveNotFinite
+from blocks.bricks import Tanh, MLP, Linear, Sigmoid, WEIGHT, BIAS
 from blocks.main_loop import MainLoop
 from fuel.streams import DataStream
-from fuel.schemes import SequentialScheme, ShuffledScheme
+from fuel.schemes import ShuffledScheme
 from blocks.model import Model
 from midi import MidiSequence
 from fuel.transformers import Padding, Mapping
@@ -55,63 +52,6 @@ y_mask = test_value(y_mask, np.ones((15, 10), dtype=floatX))
 # h = rnn_layer.apply(x)
 
 inits = [IsotropicGaussian(0.001), IsotropicGaussian(0.001), IsotropicGaussian(0.001)]
-
-
-class SimpleRNN(BaseRecurrent):
-    def __init__(self, dims, **kwargs):
-        super(SimpleRNN, self).__init__(**kwargs)
-        self.dim = dims[0]
-        self.dims = dims[:2] + dims[-1:]
-
-        # self.in_layer = Linear(input_dim=dims[0], output_dim=dims[1],
-        # weights_init=IsotropicGaussian(0.01),
-        # use_bias=False,
-        # # biases_init=Constant(0.0),
-        # name="in_layer")
-        #
-        # self.rnn_layer = SimpleRecurrent(dim=dims[1], activation=NanRectify(),
-        # weights_init=Identity(0.5),
-        # biases_init=Constant(0.0),
-        #                                  use_bias=True,
-        #                                  name="rnn_layer")
-
-
-        self.in_layer = Linear(input_dim=dims[0], output_dim=dims[1] * 4,
-                               weights_init=IsotropicGaussian(0.01),
-                               biases_init=Constant(0.0),
-                               use_bias=False,
-                               name="in_layer")
-
-        self.rnn_layer = LSTM(dim=dims[1], activation=Tanh(),
-                              weights_init=IsotropicGaussian(0.01),
-                              biases_init=Constant(0.0),
-                              use_bias=True,
-                              name="rnn_layer")
-
-        self.out_layer = MLP(activations=[Sigmoid()], dims=[dims[1], dims[2]],
-                             weights_init=IsotropicGaussian(0.01),
-                             use_bias=True,
-                             biases_init=Constant(0.0),
-                             name="out_layer")
-
-        self.children = [self.in_layer, self.rnn_layer, self.out_layer]
-
-    @recurrent(sequences=['inputs', 'input_mask'], contexts=[], states=['hidden_state', 'cells'],
-               outputs=['hidden_state', 'cells', 'output'])
-    def apply(self, inputs, input_mask, hidden_state=None, cells=None, output=None):
-        h_in = self.in_layer.apply(inputs)
-        hidden_state, cells = self.rnn_layer.apply(inputs=h_in, states=hidden_state, cells=cells, mask=input_mask,
-                                                   iterate=False)
-        # hidden_state = self.rnn_layer.apply(inputs=h_in, states=hidden_state, mask=input_mask, iterate=False)
-        output = self.out_layer.apply(hidden_state)
-        return hidden_state, cells, output
-        # return hidden_state, output
-
-    def get_dim(self, name):
-        dims = dict(zip(['inputs', 'hidden_state', 'output'], self.dims))
-        dims['cells'] = dims['hidden_state']
-        return dims.get(name, None) or super(SimpleRNN, self).get_dim(name)
-
 
 train = MidiSequence('nottingham')
 test = MidiSequence('nottingham', which_set='test')
@@ -168,8 +108,9 @@ for i, p in enumerate(params):
     # cost += reg * abs(p).sum()
     cost += reg * (p ** 2).sum()
     param_nans += T.isnan(p).sum()
+    name = params[i].name
     params[i] = params[i].mean()
-    params[i].name += str(i)
+    params[i].name = name + str(i)
 cost.name = "final_cost"
 
 param_nans.name = 'params_nans'

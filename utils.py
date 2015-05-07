@@ -43,10 +43,10 @@ class MeanSquare(Cost):
 class NegativeLogLikelihood(Cost):
     @application(outputs=["cost"])
     def apply(self, y, y_hat, y_mask):
-        return -T.mean(T.sum(T.sum(
+        return -T.sum(T.mean(T.sum(
             (y * T.log(T.switch(y_hat > 0, y_hat, 1e-18))) +
             ((1 - y) * T.log(T.switch(1 - y_hat > 0, 1 - y_hat, 1e-18))),
-            axis=2) * y_mask), axis=1)
+            axis=2) * y_mask, axis=1))
 
 
 class NanRectify(Activation):
@@ -66,3 +66,8 @@ class ParametricRectifier(Activation):
     def apply(self, input_):
         res = T.switch(input_ > 0, input_, self.leaky_init * input_)
         return T.switch(T.isnan(res), 0, res)
+
+class Sigmoid(Activation):
+    @application(inputs=['input_'], outputs=['output'])
+    def apply(self, input_):
+        return 1.17*T.nnet.sigmoid(input_)
