@@ -1,25 +1,26 @@
-import time
-
 __author__ = 'mike'
 
 import sys
-
+import time
 from blocks.bricks.recurrent import BaseRecurrent, LSTM, recurrent
 from blocks.bricks import Linear, MLP, Tanh, Sigmoid, lazy, Initializable
 from blocks.initialization import IsotropicGaussian, Constant
 from blocks.utils import shared_floatx_nans
 from blocks.roles import add_role, WEIGHT, BIAS, has_roles
-from blocks.graph import ComputationGraph
 import theano
 import theano.tensor as T
-from theano.tensor.shared_randomstreams import RandomStreams
 import numpy as np
+from blocks.graph import ComputationGraph
+
+from utils import test_value
 
 sys.setrecursionlimit(10000)
+from theano.tensor.shared_randomstreams import RandomStreams
 
-rng = RandomStreams(seed=np.random.randint(1 << 30))
+from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+rng = RandomStreams (seed=np.random.randint(1 << 30))
+
 floatX = theano.config.floatX
-
 
 class SimpleRNN(BaseRecurrent):
     def __init__(self, dims, **kwargs):
@@ -61,7 +62,7 @@ class SimpleRNN(BaseRecurrent):
 
     @recurrent(sequences=['inputs', 'input_mask'], contexts=[], states=['hidden_state', 'cells'],
                outputs=['hidden_state', 'cells', 'output'])
-    def apply(self, inputs, input_mask, hidden_state=None, cells=None, output=None):
+    def apply(self, inputs, input_mask, hidden_state=None, cells=None):
         h_in = self.in_layer.apply(inputs)
         hidden_state, cells = self.rnn_layer.apply(inputs=h_in, states=hidden_state, cells=cells, mask=input_mask,
                                                    iterate=False)
@@ -70,9 +71,6 @@ class SimpleRNN(BaseRecurrent):
         return hidden_state, cells, output
         # return hidden_state, output
 
-    def generate(self, ):
-        pass
-
 
     def get_dim(self, name):
         dims = dict(zip(['inputs', 'hidden_state', 'output'], self.dims))
@@ -80,114 +78,189 @@ class SimpleRNN(BaseRecurrent):
         return dims.get(name, None) or super(SimpleRNN, self).get_dim(name)
 
 
-class Rbm(Initializable):
+class Rbm(Initializable, BaseRecurrent):
     @lazy(allocation=['visible_dim', 'hidden_dim'])
-    def __init__(self, dimensions, activation=Sigmoid(), **kwargs):
+    def __init__(self, visible_dim, hidden_dim, activation=Sigmoid(), **kwargs):
         super(Rbm, self).__init__(**kwargs)
-        self.dimensions = dimensions
+        self.hidden_dim = hidden_dim
+        self.visible_dim = visible_dim
         self.activation = activation
         self.children = [activation]
-        self.weights = []
-    # @property
-    # def W(self):
-    # return self.params[0]
-    #
-    # @W.setter
-    # def W(self, value):
-    # self.params[0] = value
+
+    @property
+    def W(self):
+        return self.params[0]
+
+    @W.setter
+    def W(self, value):
+        self.params[0] = value
+
+    @property
+    def bv(self):
+        return self.params[1]
+
+    @property
+    def bh(self):
+        return self.params[2]
 
     def _allocate(self):
-        for f, t in zip(self.dimensions[:-1], self.dimensions[1:]):
-            W = shared_floatx_nans((f, t), name='W')
-            add_role(W, WEIGHT)
-            self.params.append(W)
-            self.weights.append(W)
-            self.add_auxiliary_variable(W.norm(2), name='W_norm')
+        W = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='Wrbm')
+        add_role(W, WEIGHT)
+        self.params.append(W)
+        self.add_auxiliary_variable(W.norm(2), name='W_norm')
+        bv = shared_floatx_nans((self.visible_dim,), name='bv')
+        add_role(bv, BIAS)
+        self.params.append(bv)
+        self.add_auxiliary_variable(bv.norm(2), name='bv_norm')
+        bh = shared_floatx_nans((self.hidden_dim,), name='bh')
+        add_role(bh, BIAS)
+        self.params.append(bh)
+        self.add_auxiliary_variable(bh.norm(2), name='bh_norm')
+
 
     def _initialize(self):
         for param in self.params:
-            if has_roles(param, WEIGHT):
+            if has_roles(param, [WEIGHT]):
                 self.weights_init.initialize(param, self.rng)
-            elif has_roles(param, BIAS):
+            elif has_roles(param, [BIAS]):
                 self.biases_init.initialize(param, self.rng)
 
-    @recurrent(sequences=[], states=['next_state'], outputs=['mean_visible', 'next_state'], contexts=['bv', 'bh', 'W'])
-    def apply(self, next_state, bv=None, bh=None):
-        mean_hidden,h = [],[]
-        for i in range(len(self.dimensions), step=2):
-            activation_input = T.dot(next_state, self.W)
-            mean_hidden[i] = self.activation.apply(T.dot(next_state, self.W) + bh)
-            h[i] = rng.binomial(size=mean_hidden.shape, n=1, p=mean_hidden,
-                             dtype=floatX)
-        for
-            mean_visible = self.activation.apply(T.dot(h, self.W.T) + bv)
+    @recurrent(sequences=[], states=['visible'], outputs=['mean_visible', 'visible'], contexts=['bv', 'bh', 'W'])
+    def apply(self, visible=None, bv=None, bh=None):
+        bv = self.bv if bv is None else bv
+        bh = self.bh if bh is None else bh
+        mean_hidden = self.activation.apply(T.dot(visible, self.W) + bh)
+        h = rng.binomial(size=mean_hidden.shape, n=1, p=mean_hidden,
+                         dtype=floatX)
+        mean_visible = self.activation.apply(T.dot(h, self.W.T) + bv)
         v = rng.binomial(size=mean_visible.shape, n=1, p=mean_visible,
                          dtype=floatX)
-        return mean_visible, v
+        cg = ComputationGraph(v)
+        return [mean_visible, v], cg.updates
 
     def free_energy(self, v, bv, bh):
         return -(v * bv).sum() - T.log(1 + T.exp(T.dot(v, self.W) + bh)).sum()
 
-    def cost(self, v, bv, bh, k, batch_size):
-        v_sample = self.apply(v, bv=bv, bh=bh, n_steps=k, batch_size=batch_size)
-        cost = (self.free_energy(v, bv, bh) - self.free_energy(v_sample, bv, bh)) / v.shape[0]
-        return cost
+    def cost(self, visible, bv, bh, k, batch_size):
+        _, v_sample = self.apply(visible, bv=bv, bh=bh, n_steps=k, batch_size=batch_size)
+        cost = (self.free_energy(visible, bv, bh) - self.free_energy(v_sample[-1], bv, bh)) / visible.shape[0]
+        return cost, v_sample
 
     def get_dim(self, name):
-        if name == 'next_state':
+        if name == 'visible':
             return self.visible_dim
         return super(Rbm, self).get_dim(name)
 
 
 class Rnnrbm(BaseRecurrent, Initializable):
-    @lazy(allocation=['input_dim', 'output_dim', 'visble_dim', 'hidden_dim'])
-    def __init__(self, input_dim, output_dim, **kwargs):
+    @lazy(allocation=['input_dim', 'rnn_dimension', 'visible_dim', 'hidden_dim'])
+    def __init__(self, input_dim, rnn_dimension, visible_dim, hidden_dim, **kwargs):
         super(Rnnrbm, self).__init__(**kwargs)
         self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.visble_dim =
+        self.rnn_dimension = rnn_dimension
+        self.visible_dim = visible_dim
+        self.hidden_dim = hidden_dim
 
-    def _allocate(self):
-        Wrbm = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='Wrbm')
-        add_role(Wrbm, WEIGHT)
-        self.params.append(Wrbm)
-        self.add_auxiliary_variable(Wrbm.norm(2), name='Wrbm_norm')
+        # self.in_layer = Linear(input_dim=input_dim, output_dim=rnn_dimension * 4,
+        # weights_init=IsotropicGaussian(0.01),
+        # biases_init=Constant(0.0),
+        # use_bias=False,
+        #                        name="in_layer")
 
-        bv = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='bv')
-        add_role(bv, BIAS)
-        self.params.append(bv)
-        self.add_auxiliary_variable(bv.norm(2), name='bv_norm')
+        self.rbm = Rbm(visible_dim=visible_dim, hidden_dim=hidden_dim,
+                       activation=Sigmoid(), weights_init=IsotropicGaussian(0.1), biases_init=Constant(0.1),
+                       name='rbm2l')
 
-        bh = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='bh')
-        add_role(bh, BIASaw)
-        self.params.append(bh)
-        self.add_auxiliary_variable(bh.norm(2), name='bh_norm')
+        self.uv = Linear(input_dim=rnn_dimension, output_dim=visible_dim,
+                         weights_init=IsotropicGaussian(0.01),
+                         biases_init=Constant(0.001),
+                         use_bias=True, name='uv')
 
-        Wuh = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='Wuh')
-        add_role(Wuh, WEIGHT)
-        self.params.append(Wuh)
-        self.add_auxiliary_variable(Wuh.norm(2), name='Wuh_norm')
 
-        Wuv = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='W')
-        add_role(Wuv, WEIGHT)
-        self.params.append(Wuv)
-        self.add_auxiliary_variable(Wuv.norm(2), name='Wuv_norm')
+        self.uh = Linear(input_dim=rnn_dimension, output_dim=hidden_dim,
+                         weights_init=IsotropicGaussian(0.001),
+                         biases_init=Constant(0.001),
+                         use_bias=True, name='uh')
 
-        Wvu = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='Wvu')
-        add_role(Wvu, WEIGHT)
-        self.params.append(Wvu)
-        self.add_auxiliary_variable(Wvu.norm(2), name='Wvu_norm')
+
+        self.vu = Linear(input_dim=visible_dim, output_dim=rnn_dimension * 4,
+                         weights_init=IsotropicGaussian(0.1),
+                         biases_init=Constant(0.01),
+                         use_bias=True, name='vu')
+
+
+        self.rnn = LSTM(dim=rnn_dimension, activation=Tanh(),
+                        weights_init=IsotropicGaussian(0.01),
+                        biases_init=Constant(0.0),
+                        use_bias=True,
+                        name="rnn_layer")
+
+        # self.out_layer = MLP(activations=[Sigmoid()], dims=[rnn_dimension, visible_dim],
+        # weights_init=IsotropicGaussian(0.01),
+        # use_bias=True,
+        #                      biases_init=Constant(0.0),
+        #                      name="out_layer")
+        self.children = [self.rbm, self.uv, self.uh, self.vu, self.rnn]  #, self.out_layer,self.in_layer]
 
     def _initialize(self):
-        for param in self.params:
-            if has_roles(param, WEIGHT):
-                self.weights_init.initialize(param, self.rng)
-            elif has_roles(param, BIAS):
-                self.biases_init.initialize(param, self.rng)
+        self.uv.b.name = 'buv'
+        self.uv.W.name = 'Wuv'
+        self.uh.W.name = 'Wuh'
+        self.uh.b.name = 'buh'
+        self.vu.b.name = 'bvu'
+        self.vu.W.name = 'Wvu'
 
-    def apply(self, inputs, input_mask, **kwargs):
-        pass
-        # return output
+    # def _allocate(self):
+    # Wrbm = shared_floatx_nans((self.visible_dim, self.hidden_dim), name='Wrbm')
+    # add_role(Wrbm, WEIGHT)
+    # self.params.append(Wrbm)
+    # self.add_auxiliary_variable(Wrbm.norm(2), name='Wrbm_norm')
+    #
+    #
+    # def _initialize(self):
+    # for param in self.params:
+    # if has_roles(param, WEIGHT):
+    # self.weights_init.initialize(param, self.rng)
+    # elif has_roles(param, BIAS):
+    # self.biases_init.initialize(param, self.rng)
+
+    def get_dim(self, name):
+        dims = {'visible': self.visible_dim,
+                'mask': self.visible_dim,
+                'hidden_state': self.rnn_dimension,
+                'cells': self.rnn_dimension}
+        return dims.get(name, None) or super(Rnnrbm, self).get_dim(name)
+
+    @recurrent(sequences=[], contexts=[], states=['visible', 'hidden_state', 'cells'],
+               outputs=['visible', 'hidden_state', 'cells'])
+    def generate(self, visible=None, hidden_state=None, cells=None, output=None):
+        bv = self.uv.apply(hidden_state)
+        bh = self.uh.apply(hidden_state)
+        _, visible = self.rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=25, batch_size=visible.shape[0])
+        visible = visible[-1]  # [-1]
+        updates = ComputationGraph(visible).updates
+        h_in = self.vu.apply(visible)
+        hidden_state, cells = self.rnn.apply(inputs=h_in, states=hidden_state, cells=cells,
+                                             iterate=False)
+        # output = 1.17 * self.out_layer.apply(hidden_state)
+        return [visible, hidden_state, cells], updates
+
+    @recurrent(sequences=['visible', 'mask'], contexts=[], states=['hidden_state', 'cells'],
+               outputs=['hidden_state', 'cells', 'bv', 'bh'])
+    def training_biases(self, visible, mask, hidden_state, cells):
+        bv = self.uv.apply(hidden_state)
+        bh = self.uh.apply(hidden_state)
+        # inputs = rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=25)
+        h_in = self.vu.apply(visible)
+        hidden_state, cells = self.rnn.apply(inputs=h_in, states=hidden_state, cells=cells, mask=mask,
+                                             iterate=False)
+        updates = ComputationGraph(hidden_state).updates
+        return [hidden_state, cells, bv, bh], updates
+
+    def cost(self, examples, mask):
+        _, _, bv, bh = self.training_biases(visible=examples, mask=mask)
+        cost, v_samples = self.rbm.cost(visible=examples, bv=bv, bh=bh, k=10, batch_size=examples.shape[0])
+        return cost.astype(floatX), v_samples.astype(floatX)
 
 
 if __name__ == "__main__":
@@ -195,23 +268,38 @@ if __name__ == "__main__":
     hidden_dim = 200
     # v = np.float32(np.random.randn(10, visible_dim))
 
-    rbm = Rbm(visible_dim, hidden_dim, weights_init=IsotropicGaussian(0.1), use_bias=False, name='rbm')
-    rbm.allocate()
-    rbm.initialize()
-    # print rbm.initial_state
-    x = T.matrix('features')
-    x.tag.test_value = np.float32(np.random.randn(10, visible_dim))
-    a = T.ones(visible_dim, dtype=floatX) * 0.5
-    b = T.ones(hidden_dim, dtype=floatX) * 0.5
-    y = rbm.apply(next_state=x, bv=a, bh=b,
-                  n_steps=10, batch_size=10)
+    x = T.tensor3('features')
+    x_mask = T.matrix('features_mask')
+    y = T.tensor3('targets')
+    y_mask = T.matrix('targets_mask')
+
+    x = test_value(x, np.ones((15, 10, 93), dtype=floatX))
+    y = test_value(y, np.ones((15, 10, 93), dtype=floatX))
+    x_mask = test_value(x_mask, np.ones((15, 10), dtype=floatX))
+    y_mask = test_value(y_mask, np.ones((15, 10), dtype=floatX))
+
+    rnnrbm = Rnnrbm(93, 256, 93, 300)
+    rnnrbm.allocate()
+    rnnrbm.initialize()
+
+    # y = rnnrbm.generate(n_steps=5, batch_size=x.shape[1])
+    y, m = rnnrbm.cost(x, x_mask)
+
+    print y
+    # rbm = Rbm(visible_dim, hidden_dim, weights_init=IsotropicGaussian(0.1), use_bias=False, name='rbm')
+    # rbm.allocate()
+    # rbm.initialize()
+    # # print rbm.initial_state
+
+    # a = T.ones(visible_dim, dtype=floatX) * 0.5
+    # b = T.ones(hidden_dim, dtype=floatX) * 0.5
+    # y = rbm.apply(visible=x, bv=a, bh=b,
+    # n_steps=10, batch_size=10)
     cg = ComputationGraph(y)
     updates = cg.updates
-
-    f = theano.function([x], y[-1][-1][-1], updates=updates)
-    t = time.time()
-    print f(np.float32(np.random.randn(10, visible_dim)))
-    print "took: " + str(time.time() - t)
-    t = time.time()
-    print f(np.float32(np.random.randn(10, visible_dim)))
-    print "took: " + str(time.time() - t)
+    #
+    f = theano.function([x, x_mask], y, updates=updates)
+    for i in range(100):
+        t = time.time()
+        print f(np.ones((15, 10, 93), dtype=floatX), np.ones((15, 10), dtype=floatX))
+        print "took: " + str(time.time() - t)

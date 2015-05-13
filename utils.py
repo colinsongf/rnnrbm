@@ -24,13 +24,13 @@ class MismulitclassificationRate(Cost):
 
 
 class MismulitmistakeRate(Cost):
-    @application(outputs=["error_rate"])
+    @application(outputs=["mistake_rate"])
     def apply(self, y, y_hat, y_mask=None):
         if not y_mask:
             y_mask = 1
         result = (T.sum(T.sum(T.neq(y, T.ge(y_hat, threshold)), axis=2) * y_mask) /
                   # ((T.sum(y_mask) * y.shape[2]).astype(floatX)))
-                  T.sum(y_mask * T.sum(T.gt(y + T.ge(y_hat, threshold), 0), axis=2)))
+                  T.sum(y_mask * T.sum(T.gt(y + T.ge(y_hat, threshold), 0), axis=2))).astype(floatX)
         return result
 
 
@@ -46,7 +46,7 @@ class NegativeLogLikelihood(Cost):
         return -T.sum(T.mean(T.sum(
             (y * T.log(T.switch(y_hat > 0, y_hat, 1e-18))) +
             ((1 - y) * T.log(T.switch(1 - y_hat > 0, 1 - y_hat, 1e-18))),
-            axis=2) * y_mask, axis=1))
+            axis=2) * y_mask, axis=1)).astype(floatX)
 
 
 class NanRectify(Activation):
@@ -71,3 +71,8 @@ class Sigmoid(Activation):
     @application(inputs=['input_'], outputs=['output'])
     def apply(self, input_):
         return 1.17*T.nnet.sigmoid(input_)
+
+def test_value(variable, test_val):
+    variable.tag.test_value = test_val
+    return variable
+
