@@ -15,12 +15,13 @@ from fuel.schemes import ShuffledScheme
 from blocks.model import Model
 from midi import MidiSequence, MidiSequence2
 from fuel.transformers import Padding, Mapping
-from blocks.extensions import Timing, Printing, FinishAfter
+from blocks.extensions import Timing, Printing, FinishAfter, ProgressBar
 from blocks.extensions.monitoring import TrainingDataMonitoring, DataStreamMonitoring
 from blocks.monitoring import aggregation
 from blocks.extensions.plot import Plot
 from blocks.extensions.saveload import Checkpoint
 from picklable_itertools.extras import equizip
+
 
 from blocks.graph import ComputationGraph
 from utils import test_value, MismulitclassificationRate, MismulitmistakeRate, NegativeLogLikelihood
@@ -82,7 +83,7 @@ test = get_datastream(test, batch_size=256)
 rnnrbm = Rnnrbm(93, 256, 93, 256)
 rnnrbm.allocate()
 rnnrbm.initialize()
-cost, v_sample = rnnrbm.cost(x, x_mask)
+cost, v_sample = rnnrbm.cost(examples=x, mask=x_mask)
 
 error_rate = MismulitclassificationRate().apply(x, v_sample[-1], x_mask)
 error_rate.name = "error on note as a whole"
@@ -137,7 +138,7 @@ extensions = [FinishAfter(after_n_epochs=5000),
                   after_epoch=True),
               Timing(),
               Printing(),
-              Checkpoint('piano_experiment_mainloop')]
+              ProgressBar()]
 bokeh = True
 if bokeh:
     extensions.append(Plot(
@@ -160,4 +161,4 @@ main_loop.run()
 newdir = str(datetime.now())
 os.mkdir(newdir)
 for i,param in enumerate(main_loop.model.parameters):
-    np.save(os.path.join(newdir,param.name+str(i)), param.get_value())
+    np.save(os.path.join(newdir, param.name+str(i)), param.get_value())

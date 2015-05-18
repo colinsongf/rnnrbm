@@ -2,6 +2,7 @@ __author__ = 'mike'
 
 import sys
 import time
+
 from blocks.bricks.recurrent import BaseRecurrent, LSTM, recurrent
 from blocks.bricks import Linear, MLP, Tanh, Sigmoid, lazy, Initializable
 from blocks.initialization import IsotropicGaussian, Constant
@@ -14,13 +15,15 @@ from blocks.graph import ComputationGraph
 
 from utils import test_value
 
+
 sys.setrecursionlimit(10000)
-from theano.tensor.shared_randomstreams import RandomStreams
 
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-rng = RandomStreams (seed=np.random.randint(1 << 30))
+
+rng = RandomStreams(seed=np.random.randint(1 << 30))
 
 floatX = theano.config.floatX
+
 
 class SimpleRNN(BaseRecurrent):
     def __init__(self, dims, **kwargs):
@@ -138,13 +141,20 @@ class Rbm(Initializable, BaseRecurrent):
         cg = ComputationGraph(v)
         return [mean_visible, v], cg.updates
 
-    def free_energy(self, v, bv, bh):
-        return -(v * bv).sum() - T.log(1 + T.exp(T.dot(v, self.W) + bh)).sum()
+    def free_energy(self, v, bv, bh, mask=None):
+        bv = self.bv if bv is None else bv
+        bh = self.bh if bh is None else bh
+        if mask:
+            return -(v * bv * mask[:, :, None]).sum() - T.sum(
+                mask[:, :, None] * T.log(1 + (T.exp(T.dot(v, self.W) + bh))))
+        else:
+            return -(v * bv).sum() - T.sum(T.log(1 + (T.exp(T.dot(v, self.W) + bh))))
 
-    def cost(self, visible, bv, bh, k, batch_size):
-        _, v_sample = self.apply(visible, bv=bv, bh=bh, n_steps=k, batch_size=batch_size)
-        cost = (self.free_energy(visible, bv, bh) - self.free_energy(v_sample[-1], bv, bh)) / visible.shape[0]
-        return cost, v_sample
+    def cost(self, visible, k, batch_size, bv=None, bh=None, mask=None):
+        _, v_sample = self.apply(visible=visible, bv=bv, bh=bh, n_steps=k, batch_size=batch_size)
+        cost = (self.free_energy(visible, bv, bh, mask=mask) - self.free_energy(v_sample[-1], bv, bh, mask=mask)) / \
+               visible.shape[0]
+        return cost.astype(floatX), v_sample
 
     def get_dim(self, name):
         if name == 'visible':
@@ -153,10 +163,9 @@ class Rbm(Initializable, BaseRecurrent):
 
 
 class Rnnrbm(BaseRecurrent, Initializable):
-    @lazy(allocation=['input_dim', 'rnn_dimension', 'visible_dim', 'hidden_dim'])
-    def __init__(self, input_dim, rnn_dimension, visible_dim, hidden_dim, **kwargs):
+    @lazy(allocation=['rnn_dimension', 'visible_dim', 'hidden_dim'])
+    def __init__(self, rnn_dimension, visible_dim, hidden_dim, **kwargs):
         super(Rnnrbm, self).__init__(**kwargs)
-        self.input_dim = input_dim
         self.rnn_dimension = rnn_dimension
         self.visible_dim = visible_dim
         self.hidden_dim = hidden_dim
@@ -165,29 +174,26 @@ class Rnnrbm(BaseRecurrent, Initializable):
         # weights_init=IsotropicGaussian(0.01),
         # biases_init=Constant(0.0),
         # use_bias=False,
-        #                        name="in_layer")
+        # name="in_layer")
 
         self.rbm = Rbm(visible_dim=visible_dim, hidden_dim=hidden_dim,
                        activation=Sigmoid(), weights_init=IsotropicGaussian(0.1), biases_init=Constant(0.1),
                        name='rbm2l')
 
         self.uv = Linear(input_dim=rnn_dimension, output_dim=visible_dim,
-                         weights_init=IsotropicGaussian(0.01),
+                         weights_init=IsotropicGaussian(0.001),
                          biases_init=Constant(0.001),
                          use_bias=True, name='uv')
-
 
         self.uh = Linear(input_dim=rnn_dimension, output_dim=hidden_dim,
                          weights_init=IsotropicGaussian(0.001),
                          biases_init=Constant(0.001),
                          use_bias=True, name='uh')
 
-
         self.vu = Linear(input_dim=visible_dim, output_dim=rnn_dimension * 4,
                          weights_init=IsotropicGaussian(0.1),
                          biases_init=Constant(0.01),
                          use_bias=True, name='vu')
-
 
         self.rnn = LSTM(dim=rnn_dimension, activation=Tanh(),
                         weights_init=IsotropicGaussian(0.01),
@@ -198,11 +204,18 @@ class Rnnrbm(BaseRecurrent, Initializable):
         # self.out_layer = MLP(activations=[Sigmoid()], dims=[rnn_dimension, visible_dim],
         # weights_init=IsotropicGaussian(0.01),
         # use_bias=True,
-        #                      biases_init=Constant(0.0),
+        # biases_init=Constant(0.0),
         #                      name="out_layer")
         self.children = [self.rbm, self.uv, self.uh, self.vu, self.rnn]  #, self.out_layer,self.in_layer]
 
-    def _initialize(self):
+    def initialize(self, pretrained_rbm=None, **kwargs):
+        super(Rnnrbm, self).initialize(**kwargs)
+        if pretrained_rbm is not None:
+            self.rbm.bv.set_value(pretrained_rbm.bv.get_value())
+            self.uv.b.set_value(pretrained_rbm.bv.get_value())
+            self.rbm.bh.set_value(pretrained_rbm.bh.get_value())
+            self.uh.b.set_value(pretrained_rbm.bh.get_value())
+            self.rbm.W.set_value(pretrained_rbm.W.get_value())
         self.uv.b.name = 'buv'
         self.uv.W.name = 'Wuv'
         self.uh.W.name = 'Wuh'
@@ -233,10 +246,10 @@ class Rnnrbm(BaseRecurrent, Initializable):
 
     @recurrent(sequences=[], contexts=[], states=['visible', 'hidden_state', 'cells'],
                outputs=['visible', 'hidden_state', 'cells'])
-    def generate(self, visible=None, hidden_state=None, cells=None, output=None):
+    def generate(self, visible=None, hidden_state=None, cells=None, output=None, rbm_steps=25):
         bv = self.uv.apply(hidden_state)
         bh = self.uh.apply(hidden_state)
-        _, visible = self.rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=25, batch_size=visible.shape[0])
+        _, visible = self.rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=rbm_steps, batch_size=visible.shape[0])
         visible = visible[-1]  # [-1]
         updates = ComputationGraph(visible).updates
         h_in = self.vu.apply(visible)
@@ -257,9 +270,9 @@ class Rnnrbm(BaseRecurrent, Initializable):
         updates = ComputationGraph(hidden_state).updates
         return [hidden_state, cells, bv, bh], updates
 
-    def cost(self, examples, mask):
+    def cost(self, examples, mask, k=10):
         _, _, bv, bh = self.training_biases(visible=examples, mask=mask)
-        cost, v_samples = self.rbm.cost(visible=examples, bv=bv, bh=bh, k=10, batch_size=examples.shape[0])
+        cost, v_samples = self.rbm.cost(visible=examples, bv=bv, bh=bh, k=k, batch_size=examples.shape[0])
         return cost.astype(floatX), v_samples.astype(floatX)
 
 
