@@ -1,7 +1,6 @@
-__author__ = 'mike'
-
 import sys
 import os
+import argparse
 from datetime import datetime
 from numpy import float32
 
@@ -24,7 +23,7 @@ from theano import tensor as T
 from blocks.main_loop import MainLoop
 
 from midi import MidiSequence
-from rbm_pretrain import get_rbm_pretraining_params, get_rnnrbm_training_params
+from rbm_pretrain import get_rbm_pretraining_params, get_rnnrbm_training_params, initialize_rbm, initialize_rnnrbm
 from utils import test_value
 from midi import MidiSequence2
 from miditools.utils import midiwrite
@@ -86,11 +85,11 @@ def pretrain(train, x, x_mask, epochs=900, test=None):
     return main_loop, rbm
 
 
-def train_rnnrbm(train, x, x_mask, epochs=1000, rbm=None, test=None):
-    rnnrbm, cost, v_sample, error_rate, mistake_rate = get_rnnrbm_training_params(x, x_mask, epochs=epochs, rbm=rbm,
-                                                                                  test_stream=test)
+def train_rnnrbm(train, x, x_mask, epochs=1000, rbm=None, rnnrbm=None, test=None):
     cdk = theano.shared(10)
     lr = theano.shared(float32(0.004))
+
+    rnnrbm, cost, v_sample, error_rate, mistake_rate = get_rnnrbm_training_params(x, x_mask, rbm=rbm, cdk=cdk, rnnrbm=rnnrbm)
 
     model = Model(cost)
     cg = ComputationGraph([cost])
@@ -173,26 +172,81 @@ def get_data(train_batch=160, test_batch=256):
 
 
 if __name__ == "__main__":
-    x, x_mask, y, y_mask, train, test = get_data(train_batch=256, test_batch=256)
-    pretrain_main, rbm = pretrain(train, x, x_mask, epochs=1200, test=test)
 
-    newdir = str(datetime.now())
-    os.mkdir(newdir)
-    for i, param in enumerate(pretrain_main.model.parameters):
-        np.save(os.path.join(newdir, param.name + str(i)), param.get_value())
+    parser = argparse.ArgumentParser(description="Train RnnRbm")
+    parser.add_argument('--rbm', type=str, help='Rbm params')
+    parser.add_argument('--rnnrbm', type=str, help='Rnnrbm params')
+    parser.add_argument('--train', type=str, help='Rnnrbm params')
+    parser.add_argument('--save', type=str, help='Rnnrbm params')
+
+
+    args = parser.parse_args()
+    rbm = None
+    rnnrbm = None
+
+    newdir = datetime.now().isoformat().replace(':', '-')
+    if args.save:
+        os.mkdir(newdir)
+
+    if args.rnnrbm:
+        params = {
+
+            "Wrbm": np.load(os.path.join(args.rnnrbm, 'Wrbm.npy')),
+            "Wuv": np.load(os.path.join(args.rnnrbm, 'Wuv.npy')),
+            "Wuh": np.load(os.path.join(args.rnnrbm, 'Wuh.npy')),
+            "Wvu": np.load(os.path.join(args.rnnrbm, 'Wvu.npy')),
+            "buv": np.load(os.path.join(args.rnnrbm, 'buv.npy')),
+            "buh": np.load(os.path.join(args.rnnrbm, 'buh.npy')),
+            "bvu": np.load(os.path.join(args.rnnrbm, 'bvu.npy')),
+            "W_cell_to_forget": np.load(os.path.join(args.rnnrbm, 'W_cell_to_forget.npy')),
+            "W_cell_to_in": np.load(os.path.join(args.rnnrbm, 'W_cell_to_in.npy')),
+            "W_cell_to_out": np.load(os.path.join(args.rnnrbm, 'W_cell_to_out.npy')),
+            "W_state": np.load(os.path.join(args.rnnrbm, 'W_state.npy'))
+        }
+        rnnrbm = initialize_rnnrbm(**params)
+
+    elif args.rbm:
+        print "Retrieving pretrained RBM"
+        Wrbm = np.load(os.path.join(args.rbm, 'Wrbm.npy'))
+        bv = np.load(os.path.join(args.rbm, 'bv.npy'))
+        bh = np.load(os.path.join(args.rbm, 'bh.npy'))
+        rbm = initialize_rbm(Wrbm=Wrbm, bv=bv, bh=bh)
+    else:
+        print "Pretraining Rbm"
+        x, x_mask, y, y_mask, train, test = get_data(train_batch=256, test_batch=256)
+        pretrain_main, rbm = pretrain(train, x, x_mask, epochs=1200, test=test)
+        if args.save:
+            for i, param in enumerate(pretrain_main.model.parameters):
+                np.save(os.path.join(newdir, param.name), param.get_value())
 
     x, x_mask, y, y_mask, train, test = get_data(train_batch=160, test_batch=256)
-    training_main, rnnrbm = train_rnnrbm(train, x, x_mask, epochs=1000, rbm=rbm, test=test)
 
-    for i, param in enumerate(training_main.model.parameters):
-        np.save(os.path.join(newdir, param.name + str(i)), param.get_value())
+    if args.train:
+        training_main, rnnrbm = train_rnnrbm(train, x, x_mask, epochs=1000, rbm=rbm, rnnrbm=rnnrbm, test=test)
+        if args.save:
+            for i, param in enumerate(training_main.model.parameters):
+                np.save(os.path.join(newdir, param.name), param.get_value())
 
-    generated_songs = rnnrbm.generate(n_steps=1000, batch_size=3, rbm_steps=100)[0]
-    generate = theano.function([], [generated_songs], updates=ComputationGraph(generated_songs).updates)
-    piano_rolls = generate()[0]
+    examples = []
+    for t in train.get_epoch_iterator():
+        examples.append(t[0][:40, 3:5, :])
+
+    examples = np.hstack(examples)[:40]
+
+    burn_in_input = T.tensor3('burn_in')
+    hidden_state, cells, _, _ = rnnrbm.training_biases(visible=burn_in_input)
+
+    generated_songs = rnnrbm.generate(visible=burn_in_input[-1], hidden_state=hidden_state[-1], cells=cells[-1],
+                                      n_steps=1000, batch_size=examples.shape[1],
+                                      rbm_steps=30)[0]
+    generated_songs = T.concatenate((burn_in_input, generated_songs))
+    # burn_in = theano.function([x],[hidden_state,cells])
+    generate = theano.function([burn_in_input], [generated_songs], updates=ComputationGraph(generated_songs).updates)
+    piano_rolls = generate(examples)[0]
     print piano_rolls.shape
     piano_rolls = np.rollaxis(piano_rolls, 1, 0)
 
     for i, piano_roll in enumerate(piano_rolls):
-        np.save(os.path.join(newdir, 'piano_roll%s' % i), piano_roll)
+        if args.save:
+             np.save(os.path.join(newdir, 'piano_roll%s' % i), piano_roll)
         midiwrite(newdir + '%s.midi' % i, piano_roll, r=(0, 93))

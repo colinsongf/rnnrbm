@@ -130,8 +130,7 @@ class Rbm(Initializable, BaseRecurrent):
 
     @recurrent(sequences=[], states=['visible'], outputs=['mean_visible', 'visible'], contexts=['bv', 'bh', 'W'])
     def apply(self, visible=None, bv=None, bh=None):
-        bv = self.bv if bv is None else bv
-        bh = self.bh if bh is None else bh
+
         mean_hidden = self.activation.apply(T.dot(visible, self.W) + bh)
         h = rng.binomial(size=mean_hidden.shape, n=1, p=mean_hidden,
                          dtype=floatX)
@@ -144,7 +143,7 @@ class Rbm(Initializable, BaseRecurrent):
     def free_energy(self, v, bv, bh, mask=None):
         bv = self.bv if bv is None else bv
         bh = self.bh if bh is None else bh
-        if mask:
+        if mask is not None:
             return -(v * bv * mask[:, :, None]).sum() - T.sum(
                 mask[:, :, None] * T.log(1 + (T.exp(T.dot(v, self.W) + bh))))
         else:
@@ -244,23 +243,24 @@ class Rnnrbm(BaseRecurrent, Initializable):
                 'cells': self.rnn_dimension}
         return dims.get(name, None) or super(Rnnrbm, self).get_dim(name)
 
-    @recurrent(sequences=[], contexts=[], states=['visible', 'hidden_state', 'cells'],
+    @recurrent(sequences=[], contexts=['visible'], states=['hidden_state', 'cells'],
                outputs=['visible', 'hidden_state', 'cells'])
-    def generate(self, visible=None, hidden_state=None, cells=None, output=None, rbm_steps=25):
+    def generate(self, visible=None, hidden_state=None, cells=None, rbm_steps=25):
         bv = self.uv.apply(hidden_state)
         bh = self.uh.apply(hidden_state)
-        _, visible = self.rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=rbm_steps, batch_size=visible.shape[0])
-        visible = visible[-1]  # [-1]
-        updates = ComputationGraph(visible).updates
+        visible_start = T.zeros_like((visible))
+        _, visible = self.rbm.apply(visible=visible_start, bv=bv, bh=bh, n_steps=rbm_steps, batch_size=visible.shape[0])
+        visible = visible[-1]
         h_in = self.vu.apply(visible)
         hidden_state, cells = self.rnn.apply(inputs=h_in, states=hidden_state, cells=cells,
                                              iterate=False)
+        updates = ComputationGraph(hidden_state).updates
         # output = 1.17 * self.out_layer.apply(hidden_state)
         return [visible, hidden_state, cells], updates
 
     @recurrent(sequences=['visible', 'mask'], contexts=[], states=['hidden_state', 'cells'],
                outputs=['hidden_state', 'cells', 'bv', 'bh'])
-    def training_biases(self, visible, mask, hidden_state, cells):
+    def training_biases(self, visible, mask=None, hidden_state=None, cells=None):
         bv = self.uv.apply(hidden_state)
         bh = self.uh.apply(hidden_state)
         # inputs = rbm.apply(visible=visible, bv=bv, bh=bh, n_steps=25)
