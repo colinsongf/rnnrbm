@@ -1,17 +1,17 @@
 __author__ = 'mike'
 
 import sys
+import itertools
 
 from blocks.bricks import Sigmoid
 from blocks.initialization import Constant
-import itertools
 import theano
 import numpy as np
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from blocks.initialization import IsotropicGaussian
 
-from models import Rbm, Rnnrbm
-from utils import MismulitclassificationRate, MismulitmistakeRate
+from models import Rbm, Rnnrbm, Rnn
+from utils import MismulitclassificationRate, MismulitmistakeRate, NegativeLogLikelihood
 
 rng = RandomStreams(seed=np.random.randint(1 << 30))
 floatX = theano.config.floatX
@@ -19,7 +19,7 @@ sys.setrecursionlimit(10000)
 
 
 def initialize_rbm(Wrbm=None, bh=None, bv=None):
-    rbm = Rbm(visible_dim=93, hidden_dim=256,
+    rbm = Rbm(visible_dim=88, hidden_dim=256,
               activation=Sigmoid(), weights_init=IsotropicGaussian(0.01), biases_init=Constant(0.1),
               name='rbm2l')
     rbm.allocate()
@@ -34,14 +34,29 @@ def initialize_rbm(Wrbm=None, bh=None, bv=None):
 
     return rbm
 
+
+def initialize_rnn(dims = [88, 512, 256, 88],**kwargs):
+    rnn = Rnn(dims, name='rnn2l')
+    rnn.allocate()
+    rnn.initialize()
+    params = list(itertools.chain(*[child.params for child in rnn.children]))
+    for param in params:
+        print param.name, " -> ",
+        if param.name in kwargs:
+            print "in kwargs"
+            param.set_value(kwargs[param.name])
+        else:
+            print "not in kwargs"
+
+
 def initialize_rnnrbm(rbm=None, **kwargs):
-    rnnrbm = Rnnrbm(256, 93, 256)
+    rnnrbm = Rnnrbm(256, 88, 256)
     rnnrbm.allocate()
     rnnrbm.initialize(pretrained_rbm=rbm)
     # params = list(itertools.chain(*[child.params for child in rnnrbm.children]))
     for child in rnnrbm.children:
         for param in child.params:
-            print param.name , " -> ",
+            print param.name, " -> ",
             if param.name in kwargs:
                 print "in kwargs"
                 param.set_value(kwargs[param.name])
@@ -65,6 +80,21 @@ def get_rbm_pretraining_params(x, x_mask, cdk=1):
 
     cost.name = 'rbm_cost'
     return rbm, cost, v_sample, error_rate, mistake_rate
+
+def get_rnn_pretraining_params(x, x_mask, y, y_mask, rnn=None):
+    if rnn is None:
+        rnn = initialize_rnn()
+    hidden_states, cells, probs = rnn.apply(inputs=x, input_mask=x_mask)
+    cost = NegativeLogLikelihood().apply(y, probs, y_mask)
+
+    error_rate = MismulitclassificationRate().apply(y, probs, y_mask)
+    error_rate.name = "error on note as a whole"
+    mistake_rate = MismulitmistakeRate().apply(y, probs, y_mask)
+    mistake_rate.name = "single error within note"
+
+    cost.name = 'final_cost'
+
+    return rnn, cost, error_rate, mistake_rate
 
 
 def get_rnnrbm_training_params(x, x_mask, rbm=None, cdk=10, rnnrbm=None):
