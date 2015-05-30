@@ -2,7 +2,7 @@ Currently I 've implemented the Rnn-rbm network described in the paper [Modeling
 
 I am trying to make it work better using [blocks](https://github.com/mila-udem/blocks) and make it more modular
 - [x] Pretraining of Rbm
-- [ ] Pretraining of Rnn
+- [x] Pretraining of Rnn
 - [ ] Variable layer number Rbm
 - [ ] Modular Rnn block with any number/kind of rnns. [This would solve it](https://github.com/mila-udem/blocks/issues/46)
 

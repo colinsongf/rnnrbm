@@ -10,7 +10,6 @@ import numpy as np
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from blocks.initialization import IsotropicGaussian
 
-from models import Rbm, Rnnrbm, Rnn
 from utils import MismulitclassificationRate, MismulitmistakeRate, NegativeLogLikelihood
 
 rng = RandomStreams(seed=np.random.randint(1 << 30))
@@ -49,10 +48,10 @@ def initialize_rnn(dims = [88, 512, 256, 88],**kwargs):
             print "not in kwargs"
 
 
-def initialize_rnnrbm(rbm=None, **kwargs):
+def initialize_rnnrbm(rbm=None, rnn=None, **kwargs):
     rnnrbm = Rnnrbm(256, 88, 256)
     rnnrbm.allocate()
-    rnnrbm.initialize(pretrained_rbm=rbm)
+    rnnrbm.initialize(pretrained_rbm=rbm, pretrained_rnn=rnn)
     # params = list(itertools.chain(*[child.params for child in rnnrbm.children]))
     for child in rnnrbm.children:
         for param in child.params:
@@ -97,9 +96,9 @@ def get_rnn_pretraining_params(x, x_mask, y, y_mask, rnn=None):
     return rnn, cost, error_rate, mistake_rate
 
 
-def get_rnnrbm_training_params(x, x_mask, rbm=None, cdk=10, rnnrbm=None):
+def get_rnnrbm_training_params(x, x_mask, rbm=None, rnn=None, cdk=10, rnnrbm=None):
     if rnnrbm is None:
-        rnnrbm = initialize_rnnrbm(rbm=rbm)
+        rnnrbm = initialize_rnnrbm(rbm=rbm, rnn=rnn)
     cost, v_sample = rnnrbm.cost(examples=x, mask=x_mask, k=cdk)
     error_rate = MismulitclassificationRate().apply(x, v_sample[-1], x_mask)
     error_rate.name = "error on note as a whole"

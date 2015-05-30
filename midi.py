@@ -1,9 +1,9 @@
-#Taken from https://github.com/EderSantana/fuel/tree/422dc3e354ef7d3723ccf06424614a4305e87ddf
+# Taken from https://github.com/EderSantana/fuel/tree/422dc3e354ef7d3723ccf06424614a4305e87ddf
 
 import os
-import numpy as np
 from collections import OrderedDict
 
+import numpy as np
 from fuel.utils import do_not_pickle_attributes
 from fuel.datasets import IndexableDataset
 from fuel import config
@@ -34,17 +34,17 @@ class MidiSequence(IndexableDataset):
         self.sources = ('features', 'targets')
 
         super(MidiSequence, self).__init__(
-                OrderedDict(zip(self.sources,
-                                self._load_data(which_dataset, which_set))),
-                **kwargs)
+            OrderedDict(zip(self.sources,
+                            self._load_data(which_dataset, which_set))),
+            **kwargs)
 
     def load(self):
         self.indexables = [data[self.start:self.stop] for source, data
-                            in zip(self.provide_sources,
-                            self._load_data(
-                                self.which_dataset,
-                                self.which_set))
-                            ]
+                           in zip(self.provide_sources,
+                                  self._load_data(
+                                      self.which_dataset,
+                                      self.which_set))
+                           ]
 
     def _load_data(self, which_dataset, which_set):
         """
@@ -53,44 +53,43 @@ class MidiSequence(IndexableDataset):
         # Check which_set
         if which_set not in ['train', 'valid', 'test']:
             raise ValueError(which_set + " is not a recognized value. " +
-                        "Valid values are ['train', 'valid', 'test'].")
+                             "Valid values are ['train', 'valid', 'test'].")
         # Check which_dataset
-        if which_dataset not in ['midi', 'nottingham', 'muse', 'jsb']:
+        if not any([dset in which_dataset for dset in ['midi', 'nottingham', 'muse', 'jsb']]):
             raise ValueError(which_set + " is not a recognized value. " +
-                "Valid values are ['midi', 'nottingham', 'muse', 'jsb'].")
+                             "Valid values are ['midi', 'nottingham', 'muse', 'jsb'].")
         _data_path = os.path.join(config.data_path, 'midi')
-        if which_dataset == 'midi':
-            _path = os.path.join(_data_path, "Piano-midi.de.pickle")
-            max_label= 108
-        elif which_dataset == 'nottingham':
-            _path = os.path.join(_data_path, "Nottingham.pickle")
-            max_label = 93
-        elif which_dataset == 'muse':
-            _path = os.path.join(_data_path, "MuseData.pickle")
-            max_label = 105
-        elif which_dataset == 'jsb':
-            _path = os.path.join(_data_path, "JSBChorales.pickle")
-            max_label = 96
-        data = np.load(_path)
-        raw = data[which_set]
+        _path = []
+        if 'midi' in which_dataset:
+            _path.append(os.path.join(_data_path, "Piano-midi.de.pickle"))
+        if 'nottingham' in which_dataset:
+            _path.append(os.path.join(_data_path, "Nottingham.pickle"))
+        if 'muse' in which_dataset:
+            _path.append(os.path.join(_data_path, "MuseData.pickle"))
+        if 'jsb' in which_dataset:
+            _path.append(os.path.join(_data_path, "JSBChorales.pickle"))
+        data = []
+        for p in _path:
+            data += np.load(p)[which_set]
+
 
         features = np.asarray(
-                [np.asarray(
-                    [self.list_to_nparray(time_step,
-                    max_label) for time_step in np.asarray(raw[i][:-1])])
-                    for i in xrange(len(raw))]
-                    )
+            [np.asarray(
+                [self.list_to_nparray(time_step,
+                                      88) for time_step in np.asarray(data[i][:-1])])
+             for i in xrange(len(data))]
+        )
         targets = np.asarray(
             [np.asarray([self.list_to_nparray(time_step,
-                max_label) for time_step in np.asarray(raw[i][1:])])
-                for i in xrange(len(raw))]
-            )
+                                              88) for time_step in np.asarray(data[i][1:])])
+             for i in xrange(len(data))]
+        )
         return features, targets
 
     def list_to_nparray(self, x, dim):
         y = np.zeros((dim,), dtype=np.float32)
         for i in x:
-            y[i - 1] = 1
+            y[i - 1 - 21] = 1
         return y
 
     def get_data(self, state=None, request=None):
@@ -126,17 +125,17 @@ class MidiSequence2(IndexableDataset):
         self.sources = ('features',)
 
         super(MidiSequence2, self).__init__(
-                OrderedDict(zip(self.sources,
-                                self._load_data(which_dataset, which_set))),
-                **kwargs)
+            OrderedDict(zip(self.sources,
+                            self._load_data(which_dataset, which_set))),
+            **kwargs)
 
     def load(self):
         self.indexables = [data[self.start:self.stop] for source, data
-                            in zip(self.provide_sources,
-                            self._load_data(
-                                self.which_dataset,
-                                self.which_set))
-                            ]
+                           in zip(self.provide_sources,
+                                  self._load_data(
+                                      self.which_dataset,
+                                      self.which_set))
+                           ]
 
     def _load_data(self, which_dataset, which_set):
         """
@@ -145,39 +144,37 @@ class MidiSequence2(IndexableDataset):
         # Check which_set
         if which_set not in ['train', 'valid', 'test']:
             raise ValueError(which_set + " is not a recognized value. " +
-                        "Valid values are ['train', 'valid', 'test'].")
+                             "Valid values are ['train', 'valid', 'test'].")
         # Check which_dataset
-        if which_dataset not in ['midi', 'nottingham', 'muse', 'jsb']:
+        if not any([dset in which_dataset for dset in ['midi', 'nottingham', 'muse', 'jsb']]):
             raise ValueError(which_set + " is not a recognized value. " +
-                "Valid values are ['midi', 'nottingham', 'muse', 'jsb'].")
+                             "Valid values are ['midi', 'nottingham', 'muse', 'jsb'].")
         _data_path = os.path.join(config.data_path, 'midi')
-        if which_dataset == 'midi':
-            _path = os.path.join(_data_path, "Piano-midi.de.pickle")
-            max_label= 108
-        elif which_dataset == 'nottingham':
-            _path = os.path.join(_data_path, "Nottingham.pickle")
-            max_label = 93
-        elif which_dataset == 'muse':
-            _path = os.path.join(_data_path, "MuseData.pickle")
-            max_label = 105
-        elif which_dataset == 'jsb':
-            _path = os.path.join(_data_path, "JSBChorales.pickle")
-            max_label = 96
-        data = np.load(_path)
-        raw = data[which_set]
+        _path = []
+        if 'midi' in which_dataset:
+            _path.append(os.path.join(_data_path, "Piano-midi.de.pickle"))
+        if 'nottingham' in which_dataset:
+            _path.append(os.path.join(_data_path, "Nottingham.pickle"))
+        if 'muse' in which_dataset:
+            _path.append(os.path.join(_data_path, "MuseData.pickle"))
+        if 'jsb' in which_dataset:
+            _path.append(os.path.join(_data_path, "JSBChorales.pickle"))
+        data = []
+        for p in _path:
+            data += np.load(p)[which_set]
 
         features = np.asarray(
-                [np.asarray(
-                    [self.list_to_nparray(time_step,
-                    max_label) for time_step in np.asarray(raw[i][:-1])])
-                    for i in xrange(len(raw))]
-                    )
+            [np.asarray(
+                [self.list_to_nparray(time_step,
+                                      88) for time_step in np.asarray(data[i])])
+             for i in xrange(len(data))]
+        )
         return features,
 
     def list_to_nparray(self, x, dim):
         y = np.zeros((dim,), dtype=np.float32)
         for i in x:
-            y[i - 1] = 1
+            y[i - 1 - 21] = 1
         return y
 
     def get_data(self, state=None, request=None):
